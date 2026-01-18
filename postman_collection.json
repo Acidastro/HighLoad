@@ -1,0 +1,118 @@
+{
+	"info": {
+		"_postman_id": "social-network-api",
+		"name": "Social Network API",
+		"description": "API для социальной сети",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"variable": [
+		{
+			"key": "base_url",
+			"value": "http://localhost:8000"
+		},
+		{
+			"key": "user_id",
+			"value": ""
+		},
+		{
+			"key": "access_token",
+			"value": ""
+		}
+	],
+	"item": [
+		{
+			"name": "Health Check",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "{{base_url}}/health",
+					"host": ["{{base_url}}"],
+					"path": ["health"]
+				}
+			}
+		},
+		{
+			"name": "Register User",
+			"event": [
+				{
+					"listen": "test",
+					"script": {
+						"exec": [
+							"var jsonData = pm.response.json();",
+							"if (jsonData.user_id) {",
+							"    pm.collectionVariables.set('user_id', jsonData.user_id);",
+							"}"
+						],
+						"type": "text/javascript"
+					}
+				}
+			],
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"email\": \"user@example.com\",\n    \"password\": \"password123\",\n    \"first_name\": \"Иван\",\n    \"last_name\": \"Иванов\",\n    \"birthdate\": \"1990-01-15\",\n    \"gender\": \"male\",\n    \"interests\": \"программирование, музыка, спорт\",\n    \"city\": \"Москва\"\n}"
+				},
+				"url": {
+					"raw": "{{base_url}}/user/register",
+					"host": ["{{base_url}}"],
+					"path": ["user", "register"]
+				}
+			}
+		},
+		{
+			"name": "Login",
+			"event": [
+				{
+					"listen": "test",
+					"script": {
+						"exec": [
+							"var jsonData = pm.response.json();",
+							"if (jsonData.access_token) {",
+							"    pm.collectionVariables.set('access_token', jsonData.access_token);",
+							"}"
+						],
+						"type": "text/javascript"
+					}
+				}
+			],
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"email\": \"user@example.com\",\n    \"password\": \"password123\"\n}"
+				},
+				"url": {
+					"raw": "{{base_url}}/login",
+					"host": ["{{base_url}}"],
+					"path": ["login"]
+				}
+			}
+		},
+		{
+			"name": "Get User by ID",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "{{base_url}}/user/get/{{user_id}}",
+					"host": ["{{base_url}}"],
+					"path": ["user", "get", "{{user_id}}"]
+				}
+			}
+		}
+	]
+}
