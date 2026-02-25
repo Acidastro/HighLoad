@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Query, status
 
 from app.auth import create_access_token, hash_password, verify_password
 from app.database import Database
@@ -12,6 +12,7 @@ from app.models import (
     UserLogin,
     UserRegister,
     UserResponse,
+    UserSearchResult,
 )
 
 router = APIRouter()
@@ -104,3 +105,33 @@ async def get_user(user_id: UUID) -> UserResponse:
             interests=row["interests"],
             city=row["city"],
         )
+
+
+@router.get("/user/search", response_model=list[UserSearchResult])
+async def search_users(
+    first_name: str = Query(..., description="Часть имени для поиска"),
+    last_name: str = Query(..., description="Часть фамилии для поиска"),
+) -> list[UserSearchResult]:
+    async with Database.connection() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT id, first_name, last_name, birthdate, interests, city
+            FROM users
+            WHERE first_name LIKE $1 AND last_name LIKE $2
+            ORDER BY id
+            """,
+            f"{first_name}%",
+            f"{last_name}%",
+        )
+
+        return [
+            UserSearchResult(
+                id=row["id"],
+                first_name=row["first_name"],
+                second_name=row["last_name"],
+                birthdate=row["birthdate"],
+                biography=row["interests"],
+                city=row["city"],
+            )
+            for row in rows
+        ]

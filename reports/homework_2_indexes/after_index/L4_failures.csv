@@ -1,0 +1,5 @@
+Method,Name,Error,Occurrences
+GET,/user/search [3-letter prefix],"ConnectTimeoutError(<urllib3.connection.HTTPConnection object at 0x....>, 'Connection to 127.0.0.1 timed out. (connect timeout=None)')",122
+GET,/user/search [1-letter prefix],"ConnectTimeoutError(<urllib3.connection.HTTPConnection object at 0x....>, 'Connection to 127.0.0.1 timed out. (connect timeout=None)')",215
+GET,/user/search [2-letter prefix],"ConnectTimeoutError(<urllib3.connection.HTTPConnection object at 0x....>, 'Connection to 127.0.0.1 timed out. (connect timeout=None)')",395
+GET,/user/search [common names],"ConnectTimeoutError(<urllib3.connection.HTTPConnection object at 0x....>, 'Connection to 127.0.0.1 timed out. (connect timeout=None)')",43

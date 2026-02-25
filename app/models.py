@@ -40,3 +40,12 @@ class TokenResponse(BaseModel):
 
 class RegisterResponse(BaseModel):
     user_id: UUID
+
+
+class UserSearchResult(BaseModel):
+    id: UUID
+    first_name: str
+    second_name: str
+    birthdate: date
+    biography: str | None
+    city: str
