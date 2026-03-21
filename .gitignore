@@ -19,3 +19,4 @@ ENV/
 
 # Docker
 postgres_data/
+people.v2.csv
