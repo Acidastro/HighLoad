@@ -20,7 +20,8 @@ router = APIRouter()
 
 @router.post("/user/register", response_model=RegisterResponse)
 async def register_user(user: UserRegister) -> RegisterResponse:
-    async with Database.connection() as conn:
+    # WRITE операция — используем master
+    async with Database.master_connection() as conn:
         existing = await conn.fetchrow(
             "SELECT id FROM users WHERE email = $1",
             user.email,
@@ -61,7 +62,8 @@ async def register_user(user: UserRegister) -> RegisterResponse:
 
 @router.post("/login", response_model=TokenResponse)
 async def login(credentials: UserLogin) -> TokenResponse:
-    async with Database.connection() as conn:
+    # WRITE-like операция (проверка пароля — sensitive, читаем с master для актуальности)
+    async with Database.master_connection() as conn:
         row = await conn.fetchrow(
             "SELECT id, password_hash FROM users WHERE email = $1",
             credentials.email,
@@ -79,7 +81,8 @@ async def login(credentials: UserLogin) -> TokenResponse:
 
 @router.get("/user/get/{user_id}", response_model=UserResponse)
 async def get_user(user_id: UUID) -> UserResponse:
-    async with Database.connection() as conn:
+    # READ операция — используем slave (read-only транзакция)
+    async with Database.slave_connection() as conn:
         row = await conn.fetchrow(
             """
             SELECT id, email, first_name, last_name, birthdate,
@@ -112,7 +115,8 @@ async def search_users(
     first_name: str = Query(..., description="Часть имени для поиска"),
     last_name: str = Query(..., description="Часть фамилии для поиска"),
 ) -> list[UserSearchResult]:
-    async with Database.connection() as conn:
+    # READ операция — используем slave (read-only транзакция)
+    async with Database.slave_connection() as conn:
         rows = await conn.fetch(
             """
             SELECT id, first_name, last_name, birthdate, interests, city

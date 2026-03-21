@@ -1,9 +1,16 @@
 version: '3.8'
 
+# docker-compose.yml — топология: 1 master + 2 slave PostgreSQL 16 + FastAPI app
+# Streaming Replication с кворумной синхронной репликацией
+
 services:
-  postgres:
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL Master (WRITE узел)
+  # ---------------------------------------------------------------------------
+  postgres-master:
     image: postgres:16-alpine
-    container_name: social_network_db
+    container_name: social_network_master
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
@@ -11,8 +18,128 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - postgres_master_data:/var/lib/postgresql/data
+      # Миграции применяются при первом запуске через docker-entrypoint-initdb.d
       - ./migrations:/docker-entrypoint-initdb.d
+      # Конфиги мастера
+      - ./docker/postgres/master/postgresql.conf:/etc/postgresql/postgresql.conf
+      - ./docker/postgres/master/pg_hba.conf:/etc/postgresql/pg_hba.conf
+      # Скрипт инициализации: создание replication user
+      - ./docker/postgres/init-master.sh:/docker-entrypoint-initdb.d/999_init_master.sh
+    command: postgres -c config_file=/etc/postgresql/postgresql.conf -c hba_file=/etc/postgresql/pg_hba.conf
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d social_network"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - postgres_net
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL Slave 1 (READ узел)
+  # ---------------------------------------------------------------------------
+  postgres-slave1:
+    image: postgres:16-alpine
+    container_name: social_network_slave1
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      PGPASSWORD: postgres
+      MASTER_HOST: postgres-master
+      MASTER_PORT: "5432"
+      REPL_USER: replicator
+      REPL_PASSWORD: replicator_password
+      SLAVE_NAME: slave1
+      PGDATA: /var/lib/postgresql/data
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_slave1_data:/var/lib/postgresql/data
+      - ./docker/postgres/slave/postgresql.conf:/etc/postgresql/postgresql.conf
+      - ./docker/postgres/init-slave.sh:/init-slave.sh
+    entrypoint: ["/bin/bash", "/init-slave.sh"]
+    depends_on:
+      postgres-master:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      - postgres_net
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL Slave 2 (READ узел)
+  # ---------------------------------------------------------------------------
+  postgres-slave2:
+    image: postgres:16-alpine
+    container_name: social_network_slave2
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      PGPASSWORD: postgres
+      MASTER_HOST: postgres-master
+      MASTER_PORT: "5432"
+      REPL_USER: replicator
+      REPL_PASSWORD: replicator_password
+      SLAVE_NAME: slave2
+      PGDATA: /var/lib/postgresql/data
+    ports:
+      - "5434:5432"
+    volumes:
+      - postgres_slave2_data:/var/lib/postgresql/data
+      - ./docker/postgres/slave/postgresql.conf:/etc/postgresql/postgresql.conf
+      - ./docker/postgres/init-slave.sh:/init-slave.sh
+    entrypoint: ["/bin/bash", "/init-slave.sh"]
+    depends_on:
+      postgres-master:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      - postgres_net
+
+  # ---------------------------------------------------------------------------
+  # FastAPI Application
+  # ---------------------------------------------------------------------------
+  app:
+    build: .
+    container_name: social_network_app
+    environment:
+      # Master (WRITE)
+      DATABASE_HOST: postgres-master
+      DATABASE_PORT: "5432"
+      DATABASE_USER: postgres
+      DATABASE_PASSWORD: postgres
+      DATABASE_NAME: social_network
+      # Slaves (READ) — через запятую host:port
+      DATABASE_SLAVE_HOSTS: "postgres-slave1:5432,postgres-slave2:5432"
+      DATABASE_POOL_MIN_SIZE: "5"
+      DATABASE_POOL_MAX_SIZE: "50"
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres-master:
+        condition: service_healthy
+      postgres-slave1:
+        condition: service_healthy
+      postgres-slave2:
+        condition: service_healthy
+    networks:
+      - postgres_net
 
 volumes:
-  postgres_data:
+  postgres_master_data:
+  postgres_slave1_data:
+  postgres_slave2_data:
+
+networks:
+  postgres_net:
+    driver: bridge
