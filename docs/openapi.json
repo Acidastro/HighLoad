@@ -1,0 +1,802 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "OTUS Highload Architect",
+    "version": "1.2.0"
+  },
+  "paths": {
+    "/login": {
+      "post": {
+        "description": "Упрощенный процесс аутентификации путем передачи идентификатор пользователя и получения токена для дальнейшего прохождения авторизации",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "$ref": "#/components/schemas/UserId"
+                  },
+                  "password": {
+                    "type": "string",
+                    "example": "Секретная строка"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Успешная аутентификация",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "token": {
+                      "type": "string",
+                      "example": "e4d2e6b0-cde2-42c5-aac3-0b8316f21e58"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Невалидные данные"
+          },
+          "404": {
+            "description": "Пользователь не найден"
+          },
+          "500": {
+            "$ref": "#/components/responses/5xx"
+          },
+          "503": {
+            "$ref": "#/components/responses/5xx"
+          }
+        }
+      }
+    },
+    "/user/register": {
+      "post": {
+        "description": "Регистрация нового пользователя",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "first_name": {
+                    "type": "string",
+                    "example": "Имя"
+                  },
+                  "second_name": {
+                    "type": "string",
+                    "example": "Фамилия"
+                  },
+                  "birthdate": {
+                    "$ref": "#/components/schemas/BirthDate"
+                  },
+                  "biography": {
+                    "type": "string",
+                    "example": "Хобби, интересы и т.п."
+                  },
+                  "city": {
+                    "type": "string",
+                    "example": "Москва"
+                  },
+                  "password": {
+                    "type": "string",
+                    "example": "Секретная строка"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Успешная регистрация",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "user_id": {
+                      "type": "string",
+                      "example": "e4d2e6b0-cde2-42c5-aac3-0b8316f21e58"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Невалидные данные"
+          },
+          "500": {
+            "$ref": "#/components/responses/5xx"
+          },
+          "503": {
+            "$ref": "#/components/responses/5xx"
+          }
+        }
+      }
+    },
+    "/user/get/{id}": {
+      "get": {
+        "description": "Получение анкеты пользователя",
+        "parameters": [
+          {
+            "name": "id",
+            "schema": {
+              "$ref": "#/components/schemas/UserId"
+            },
+            "required": true,
+            "in": "path",
+            "description": "Идентификатор пользователя"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Успешное получение анкеты пользователя",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/User"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Невалидные данные"
+          },
+          "404": {
+            "description": "Анкета не найдена"
+          },
+          "500": {
+            "$ref": "#/components/responses/5xx"
+          },
+          "503": {
+            "$ref": "#/components/responses/5xx"
+          }
+        }
+      }
+    },
+    "/user/search": {
+      "get": {
+        "description": "Поиск анкет",
+        "parameters": [
+          {
+            "name": "first_name",
+            "schema": {
+              "type": "string",
+              "description": "Часть имени для поиска",
+              "example": "Конст"
+            },
+            "in": "query",
+            "required": true,
+            "description": "Условие поиска по имени"
+          },
+          {
+            "name": "last_name",
+            "schema": {
+              "type": "string",
+              "description": "Часть фамилии для поиска",
+              "example": "Оси"
+            },
+            "in": "query",
+            "required": true,
+            "description": "Условие поиска по фамилии"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Успешные поиск пользователя",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/User"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Невалидные данные"
+          },
+          "500": {
+            "$ref": "#/components/responses/5xx"
+          },
+          "503": {
+            "$ref": "#/components/responses/5xx"
+          }
+        }
+      }
+    },
+    "/friend/set/{user_id}": {
+      "put": {
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "user_id",
+            "schema": {
+              "$ref": "#/components/schemas/UserId"
+            },
+            "required": true,
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Пользователь успешно указал своего друга"
+          },
+          "400": {
+            "$ref": "#/components/responses/400"
+          },
+          "401": {
+            "$ref": "#/components/responses/401"
+          },
+          "500": {
+            "$ref": "#/components/responses/5xx"
+          },
+          "503": {
+            "$ref": "#/components/responses/5xx"
+          }
+        }
+      }
+    },
+    "/friend/delete/{user_id}": {
+      "put": {
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "user_id",
+            "schema": {
+              "$ref": "#/components/schemas/UserId"
+            },
+            "required": true,
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Пользователь успешно удалил из друзей пользователя"
+          },
+          "400": {
+            "$ref": "#/components/responses/400"
+          },
+          "401": {
+            "$ref": "#/components/responses/401"
+          },
+          "500": {
+            "$ref": "#/components/responses/5xx"
+          },
+          "503": {
+            "$ref": "#/components/responses/5xx"
+          }
+        }
+      }
+    },
+    "/post/create": {
+      "post": {
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["text"],
+                "properties": {
+                  "text": {
+                    "$ref": "#/components/schemas/PostText"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Успешно создан пост",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PostId"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/400"
+          },
+          "401": {
+            "$ref": "#/components/responses/401"
+          },
+          "500": {
+            "$ref": "#/components/responses/5xx"
+          },
+          "503": {
+            "$ref": "#/components/responses/5xx"
+          }
+        }
+      }
+    },
+    "/post/update": {
+      "put": {
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["id","text"],
+                "properties": {
+                  "id": {
+                    "$ref": "#/components/schemas/PostId"
+                  },
+                  "text": {
+                    "$ref": "#/components/schemas/PostText"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Успешно изменен пост"
+          },
+          "400": {
+            "$ref": "#/components/responses/400"
+          },
+          "401": {
+            "$ref": "#/components/responses/401"
+          },
+          "500": {
+            "$ref": "#/components/responses/5xx"
+          },
+          "503": {
+            "$ref": "#/components/responses/5xx"
+          }
+        }
+      }
+    },
+    "/post/delete/{id}": {
+      "put": {
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "schema": {
+              "$ref": "#/components/schemas/PostId"
+            },
+            "required": true,
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Успешно удален пост"
+          },
+          "400": {
+            "$ref": "#/components/responses/400"
+          },
+          "401": {
+            "$ref": "#/components/responses/401"
+          },
+          "500": {
+            "$ref": "#/components/responses/5xx"
+          },
+          "503": {
+            "$ref": "#/components/responses/5xx"
+          }
+        }
+      }
+    },
+    "/post/get/{id}": {
+      "get": {
+        "parameters": [
+          {
+            "name": "id",
+            "schema": {
+              "$ref": "#/components/schemas/PostId"
+            },
+            "required": true,
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Успешно получен пост",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Post"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/400"
+          },
+          "401": {
+            "$ref": "#/components/responses/401"
+          },
+          "500": {
+            "$ref": "#/components/responses/5xx"
+          },
+          "503": {
+            "$ref": "#/components/responses/5xx"
+          }
+        }
+      }
+    },
+    "/post/feed": {
+      "get": {
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "offset",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Оффсет с которого начинать выдачу",
+              "example": 100,
+              "default": 0
+            },
+            "required": false,
+            "in": "query"
+          },
+          {
+            "name": "limit",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Лимит, ограничивающий кол-во возвращенных сущностей",
+              "example": 10,
+              "default": 10
+            },
+            "required": false,
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Успешно получены посты друзей",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Post"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/400"
+          },
+          "401": {
+            "$ref": "#/components/responses/401"
+          },
+          "500": {
+            "$ref": "#/components/responses/5xx"
+          },
+          "503": {
+            "$ref": "#/components/responses/5xx"
+          }
+        }
+      }
+    },
+    "/post/feed/rebuild": {
+      "post": {
+        "description": "Принудительно пересоздаёт Redis-кэш ленты постов текущего пользователя из PostgreSQL. Внутренний эндпоинт homework 4, предназначен для recovery после рестарта Redis и для тестов. Не входит в основной функциональный контракт задания.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Лента успешно пересобрана",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["status", "posts_loaded"],
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "example": "ok"
+                    },
+                    "posts_loaded": {
+                      "type": "integer",
+                      "description": "Сколько постов попало в пересобранную ленту",
+                      "example": 42
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/401"
+          },
+          "500": {
+            "$ref": "#/components/responses/5xx"
+          },
+          "503": {
+            "$ref": "#/components/responses/5xx"
+          }
+        }
+      }
+    },
+    "/dialog/{user_id}/send": {
+      "post": {
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "user_id",
+            "schema": {
+              "$ref": "#/components/schemas/UserId"
+            },
+            "required": true,
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["text"],
+                "properties": {
+                  "text": {
+                    "$ref": "#/components/schemas/DialogMessageText"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Успешно отправлено сообщение"
+          },
+          "400": {
+            "$ref": "#/components/responses/400"
+          },
+          "401": {
+            "$ref": "#/components/responses/401"
+          },
+          "500": {
+            "$ref": "#/components/responses/5xx"
+          },
+          "503": {
+            "$ref": "#/components/responses/5xx"
+          }
+        }
+      }
+    },
+    "/dialog/{user_id}/list": {
+      "get": {
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "user_id",
+            "schema": {
+              "$ref": "#/components/schemas/UserId"
+            },
+            "required": true,
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Диалог между двумя пользователями",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DialogMessage"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/400"
+          },
+          "401": {
+            "$ref": "#/components/responses/401"
+          },
+          "500": {
+            "$ref": "#/components/responses/5xx"
+          },
+          "503": {
+            "$ref": "#/components/responses/5xx"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "responses": {
+      "400": {
+        "description": "Невалидные данные ввода"
+      },
+      "401": {
+        "description": "Неавторизованный доступ"
+      },
+      "5xx": {
+        "description": "Ошибка сервера",
+        "headers": {
+          "Retry-After": {
+            "description": "Время, через которое еще раз нужно сделать запрос",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "required": [
+                "message"
+              ],
+              "properties": {
+                "message": {
+                  "type": "string",
+                  "description": "Описание ошибки"
+                },
+                "request_id": {
+                  "type": "string",
+                  "description": "Идентификатор запроса. Предназначен для более быстрого поиска проблем."
+                },
+                "code": {
+                  "type": "integer",
+                  "description": "Код ошибки. Предназначен для классификации проблем и более быстрого решения проблем."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "BirthDate": {
+        "type": "string",
+        "description": "Дата рождения",
+        "format": "date",
+        "example": "2017-02-01"
+      },
+      "UserId": {
+        "type": "string",
+        "description": "Идентификатор пользователя"
+      },
+      "User": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/UserId"
+          },
+          "first_name": {
+            "type": "string",
+            "example": "Имя",
+            "description": "Имя"
+          },
+          "second_name": {
+            "type": "string",
+            "example": "Фамилия",
+            "description": "Фамилия"
+          },
+          "birthdate": {
+            "$ref": "#/components/schemas/BirthDate"
+          },
+          "biography": {
+            "type": "string",
+            "example": "Хобби, интересы и т.п.",
+            "description": "Интересы"
+          },
+          "city": {
+            "type": "string",
+            "example": "Москва",
+            "description": "Город"
+          }
+        }
+      },
+      "PostId": {
+        "type": "string",
+        "description": "Идентификатор поста",
+        "example": "1d535fd6-7521-4cb1-aa6d-031be7123c4d"
+      },
+      "PostText": {
+        "type": "string",
+        "description": "Текст поста",
+        "example": "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Lectus mauris ultrices eros in cursus turpis massa."
+      },
+      "DialogMessageText": {
+        "type": "string",
+        "description": "Текст сообщения",
+        "example": "Привет, как дела?"
+      },
+      "DialogMessage": {
+        "type": "object",
+        "required": ["from", "to", "text"],
+        "properties": {
+          "from": {
+            "$ref": "#/components/schemas/UserId"
+          },
+          "to": {
+            "$ref": "#/components/schemas/UserId"
+          },
+          "text": {
+            "$ref": "#/components/schemas/DialogMessageText"
+          }
+        }
+      },
+      "Post": {
+        "type": "object",
+        "description": "Пост пользователя",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/PostId"
+          },
+          "text": {
+            "$ref": "#/components/schemas/PostText"
+          },
+          "author_user_id": {
+            "$ref": "#/components/schemas/UserId"
+          }
+        }
+      }
+    },
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Авторизация по токену, который был получен в методе /login"
+      }
+    }
+  }
+}

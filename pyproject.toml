@@ -24,6 +24,20 @@ select = [
 [tool.ruff.lint.isort]
 known-first-party = ["app"]
 
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI dependency-injection helpers вызываются в defaults аргументов — это норма
+extend-immutable-calls = [
+    "fastapi.Depends",
+    "fastapi.Query",
+    "fastapi.Path",
+    "fastapi.Body",
+    "fastapi.Header",
+    "fastapi.Cookie",
+    "fastapi.Form",
+    "fastapi.File",
+    "fastapi.Security",
+]
+
 [tool.pyright]
 pythonVersion = "3.10"
 typeCheckingMode = "strict"

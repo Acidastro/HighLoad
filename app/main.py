@@ -6,6 +6,9 @@ from typing import TYPE_CHECKING
 from fastapi import FastAPI
 
 from app.database import Database
+from app.redis_client import RedisClient
+from app.routes.friends import router as friends_router
+from app.routes.posts import router as posts_router
 from app.routes.users import router as users_router
 
 if TYPE_CHECKING:
@@ -15,8 +18,12 @@ if TYPE_CHECKING:
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await Database.connect()
-    yield
-    await Database.disconnect()
+    await RedisClient.connect()
+    try:
+        yield
+    finally:
+        await RedisClient.disconnect()
+        await Database.disconnect()
 
 
 app = FastAPI(
@@ -27,6 +34,8 @@ app = FastAPI(
 )
 
 app.include_router(users_router, tags=["users"])
+app.include_router(friends_router, tags=["friends"])
+app.include_router(posts_router, tags=["posts"])
 
 
 @app.get("/health")

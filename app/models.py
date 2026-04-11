@@ -49,3 +49,22 @@ class UserSearchResult(BaseModel):
     birthdate: date
     biography: str | None
     city: str
+
+
+class PostCreate(BaseModel):
+    text: str
+
+
+class PostUpdate(BaseModel):
+    id: UUID
+    text: str
+
+
+class PostIdResponse(BaseModel):
+    id: UUID
+
+
+class Post(BaseModel):
+    id: UUID
+    text: str
+    author_user_id: UUID

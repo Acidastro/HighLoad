@@ -1,7 +1,5 @@
-version: '3.8'
-
-# docker-compose.yml — топология: 1 master + 2 slave PostgreSQL 16 + FastAPI app
-# Streaming Replication с кворумной синхронной репликацией
+# docker-compose.yml — топология: 1 master + 2 slave PostgreSQL 16 + Redis + FastAPI app + feed-worker
+# Streaming Replication (async), Redis-кэш ленты постов с опциональным async fan-out через Redis Streams.
 
 services:
 
@@ -107,6 +105,65 @@ services:
       - postgres_net
 
   # ---------------------------------------------------------------------------
+  # Redis (кэш ленты постов — homework 4)
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: social_network_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    # AOF включён ради persistence Redis Streams и consumer group state (post_events)
+    # maxmemory-policy allkeys-lru — кэш лент и post hash вытесняются при давлении
+    command: >
+      redis-server
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+      --appendonly yes
+      --appendfsync everysec
+      --auto-aof-rewrite-percentage 100
+      --auto-aof-rewrite-min-size 64mb
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - postgres_net
+
+  # ---------------------------------------------------------------------------
+  # Migration runner (one-shot)
+  # Прогоняет все migrations/*.sql на master в лексикографическом порядке.
+  # Все миграции используют IF NOT EXISTS / ON CONFLICT, поэтому повторный
+  # прогон безопасен. Initdb.d на мастере остаётся для случая свежего volume —
+  # на уже инициализированном volume миграции пройдут только через этот сервис.
+  # ---------------------------------------------------------------------------
+  migrate:
+    image: postgres:16-alpine
+    container_name: social_network_migrate
+    environment:
+      PGPASSWORD: postgres
+    volumes:
+      - ./migrations:/migrations:ro
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        for f in /migrations/*.sql; do
+          echo "[migrate] Applying $$f"
+          psql -h postgres-master -U postgres -d social_network \
+               -v ON_ERROR_STOP=1 -f "$$f"
+        done
+        echo "[migrate] All migrations applied."
+    depends_on:
+      postgres-master:
+        condition: service_healthy
+    networks:
+      - postgres_net
+
+  # ---------------------------------------------------------------------------
   # FastAPI Application
   # ---------------------------------------------------------------------------
   app:
@@ -123,8 +180,13 @@ services:
       DATABASE_SLAVE_HOSTS: "postgres-slave1:5432,postgres-slave2:5432"
       DATABASE_POOL_MIN_SIZE: "5"
       DATABASE_POOL_MAX_SIZE: "50"
+      # Redis (кэш ленты постов)
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_DB: "0"
     ports:
       - "8080:8080"
+    restart: unless-stopped
     depends_on:
       postgres-master:
         condition: service_healthy
@@ -132,6 +194,42 @@ services:
         condition: service_healthy
       postgres-slave2:
         condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    networks:
+      - postgres_net
+
+  # ---------------------------------------------------------------------------
+  # Feed worker (Redis Streams consumer, Phase 7)
+  # Включается через FEED_FANOUT_ASYNC=true в app, сам воркер запускается всегда.
+  # ---------------------------------------------------------------------------
+  feed-worker:
+    build: .
+    container_name: social_network_feed_worker
+    command: ["python", "-m", "app.workers.feed_worker"]
+    environment:
+      DATABASE_HOST: postgres-master
+      DATABASE_PORT: "5432"
+      DATABASE_USER: postgres
+      DATABASE_PASSWORD: postgres
+      DATABASE_NAME: social_network
+      DATABASE_SLAVE_HOSTS: "postgres-slave1:5432,postgres-slave2:5432"
+      DATABASE_POOL_MIN_SIZE: "2"
+      DATABASE_POOL_MAX_SIZE: "10"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_DB: "0"
+      FEED_STREAM_CONSUMER: "worker-1"
+    restart: unless-stopped
+    depends_on:
+      postgres-master:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     networks:
       - postgres_net
 
@@ -139,6 +237,7 @@ volumes:
   postgres_master_data:
   postgres_slave1_data:
   postgres_slave2_data:
+  redis_data:
 
 networks:
   postgres_net:

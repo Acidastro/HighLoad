@@ -3,6 +3,9 @@
 
 FROM python:3.11-slim
 
+# Небуферизованный stdout/stderr — критично для docker logs фоновых воркеров
+ENV PYTHONUNBUFFERED=1
+
 # Устанавливаем рабочую директорию
 WORKDIR /app
 
@@ -16,7 +19,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Копируем исходный код приложения
+# Копируем исходный код приложения (включая workers для feed_worker сервиса)
 COPY app/ ./app/
 
 # Порт приложения
