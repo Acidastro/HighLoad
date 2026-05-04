@@ -56,6 +56,38 @@ class Settings(BaseSettings):
     feed_stream_block_ms: int = 5000
     feed_stream_batch: int = 100
 
+    # ---------------------------------------------------------------------------
+    # Dialogs sharding (homework 5)
+    # Список DSN шардов через запятую, в порядке индексов: shard0, shard1, ...
+    # Пример (локально):
+    #   postgresql://postgres:postgres@localhost:5440/dialogs,
+    #   postgresql://postgres:postgres@localhost:5441/dialogs
+    # В Docker:
+    #   postgresql://postgres:postgres@dialogs-shard0:5432/dialogs,
+    #   postgresql://postgres:postgres@dialogs-shard1:5432/dialogs
+    # ---------------------------------------------------------------------------
+    dialogs_shards: str = (
+        "postgresql://postgres:postgres@localhost:5440/dialogs,"
+        "postgresql://postgres:postgres@localhost:5441/dialogs"
+    )
+    dialogs_pool_min_size: int = 2
+    dialogs_pool_max_size: int = 10
+
+    # ---------------------------------------------------------------------------
+    # Resharding feature-flags (homework 5, итерация 6)
+    # Нормальный режим: dialogs_read_n == dialogs_write_n == len(SHARDS).
+    # Во время решардинга:
+    #   1) WRITE_N = новое число шардов, READ_N = старое, DUAL_WRITE=true
+    #      → INSERT в оба шарда, чтения по старой схеме.
+    #   2) Backfill — переносит исторические данные на новые позиции.
+    #   3) READ_N = WRITE_N → чтения переключаются на новую схему.
+    #   4) DUAL_WRITE=false, cleanup — удаляем «уехавшие» данные на старых шардах.
+    # 0 означает «как len(SHARDS)» (читается в DialogsCluster.connect()).
+    # ---------------------------------------------------------------------------
+    dialogs_read_n: int = 0
+    dialogs_write_n: int = 0
+    dialogs_dual_write: bool = False
+
     @property
     def database_url(self) -> str:
         return (

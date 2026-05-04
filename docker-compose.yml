@@ -134,6 +134,83 @@ services:
       - postgres_net
 
   # ---------------------------------------------------------------------------
+  # PostgreSQL Dialogs Shard 0 (homework 5 — шардированные диалоги)
+  # Независимый инстанс БД для подсистемы диалогов. Schema применяется через
+  # docker-entrypoint-initdb.d из migrations/dialogs/.
+  # ---------------------------------------------------------------------------
+  dialogs-shard0:
+    image: postgres:16-alpine
+    container_name: dialogs_shard0
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: dialogs
+    ports:
+      - "5440:5432"
+    volumes:
+      - dialogs_shard0_data:/var/lib/postgresql/data
+      - ./migrations/dialogs:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d dialogs"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - postgres_net
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL Dialogs Shard 1
+  # ---------------------------------------------------------------------------
+  dialogs-shard1:
+    image: postgres:16-alpine
+    container_name: dialogs_shard1
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: dialogs
+    ports:
+      - "5441:5432"
+    volumes:
+      - dialogs_shard1_data:/var/lib/postgresql/data
+      - ./migrations/dialogs:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d dialogs"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - postgres_net
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL Dialogs Shard 2 (поднимается ТОЛЬКО для сценария решардинга,
+  # см. итерацию 6 учебного плана). Активируется профилем "resharding":
+  #     docker compose --profile resharding up -d dialogs-shard2
+  # ---------------------------------------------------------------------------
+  dialogs-shard2:
+    image: postgres:16-alpine
+    container_name: dialogs_shard2
+    profiles: ["resharding"]
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: dialogs
+    ports:
+      - "5442:5432"
+    volumes:
+      - dialogs_shard2_data:/var/lib/postgresql/data
+      - ./migrations/dialogs:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d dialogs"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - postgres_net
+
+  # ---------------------------------------------------------------------------
   # Migration runner (one-shot)
   # Прогоняет все migrations/*.sql на master в лексикографическом порядке.
   # Все миграции используют IF NOT EXISTS / ON CONFLICT, поэтому повторный
@@ -184,6 +261,10 @@ services:
       REDIS_HOST: redis
       REDIS_PORT: "6379"
       REDIS_DB: "0"
+      # Dialogs sharding (homework 5)
+      DIALOGS_SHARDS: "postgresql://postgres:postgres@dialogs-shard0:5432/dialogs,postgresql://postgres:postgres@dialogs-shard1:5432/dialogs"
+      DIALOGS_POOL_MIN_SIZE: "2"
+      DIALOGS_POOL_MAX_SIZE: "10"
     ports:
       - "8080:8080"
     restart: unless-stopped
@@ -198,6 +279,10 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
+      dialogs-shard0:
+        condition: service_healthy
+      dialogs-shard1:
+        condition: service_healthy
     networks:
       - postgres_net
 
@@ -238,6 +323,9 @@ volumes:
   postgres_slave1_data:
   postgres_slave2_data:
   redis_data:
+  dialogs_shard0_data:
+  dialogs_shard1_data:
+  dialogs_shard2_data:
 
 networks:
   postgres_net:
