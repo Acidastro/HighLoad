@@ -134,6 +134,35 @@ services:
       - postgres_net
 
   # ---------------------------------------------------------------------------
+  # RabbitMQ (homework 6 — realtime feed через WebSocket)
+  # Topic exchange "posts.events":
+  #   routing_key=feed.materialize → durable queue, читает feed-worker
+  #   routing_key=feed.user.<S>    → exclusive per-WS-instance queue
+  # Для одного узла HW достаточно; production = 3 узла + quorum queues
+  # (см. README раздел "Масштабирование RabbitMQ").
+  # ---------------------------------------------------------------------------
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: social_network_rabbitmq
+    restart: unless-stopped
+    ports:
+      - "5673:5672"   # AMQP (5672 на хосте занят другим dev-инстансом — публикуем на 5673)
+      - "15673:15672" # Management UI
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    networks:
+      - postgres_net
+
+  # ---------------------------------------------------------------------------
   # PostgreSQL Dialogs Shard 0 (homework 5 — шардированные диалоги)
   # Независимый инстанс БД для подсистемы диалогов. Schema применяется через
   # docker-entrypoint-initdb.d из migrations/dialogs/.
@@ -245,7 +274,8 @@ services:
   # ---------------------------------------------------------------------------
   app:
     build: .
-    container_name: social_network_app
+    # container_name закомментирован для возможности масштабирования через --scale
+    # container_name: social_network_app
     environment:
       # Master (WRITE)
       DATABASE_HOST: postgres-master
@@ -265,8 +295,14 @@ services:
       DIALOGS_SHARDS: "postgresql://postgres:postgres@dialogs-shard0:5432/dialogs,postgresql://postgres:postgres@dialogs-shard1:5432/dialogs"
       DIALOGS_POOL_MIN_SIZE: "2"
       DIALOGS_POOL_MAX_SIZE: "10"
+      # Realtime feed (homework 6)
+      FEED_TRANSPORT: "rabbitmq"
+      RABBITMQ_URL: "amqp://guest:guest@rabbitmq:5672/"
     ports:
-      - "8080:8080"
+      # Динамические host-порты для масштабирования: docker compose up --scale app=N
+      # Каждый инстанс получит свой свободный порт. Для одиночного запуска
+      # можно задать "8090:8080" — тогда фронт пойдёт на 8090.
+      - "8080"
     restart: unless-stopped
     depends_on:
       postgres-master:
@@ -276,6 +312,8 @@ services:
       postgres-slave2:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      rabbitmq:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
@@ -293,7 +331,7 @@ services:
   feed-worker:
     build: .
     container_name: social_network_feed_worker
-    command: ["python", "-m", "app.workers.feed_worker"]
+    command: ["python", "-m", "app.workers.feed_worker_rmq"]
     environment:
       DATABASE_HOST: postgres-master
       DATABASE_PORT: "5432"
@@ -307,11 +345,16 @@ services:
       REDIS_PORT: "6379"
       REDIS_DB: "0"
       FEED_STREAM_CONSUMER: "worker-1"
+      # Realtime feed (homework 6)
+      FEED_TRANSPORT: "rabbitmq"
+      RABBITMQ_URL: "amqp://guest:guest@rabbitmq:5672/"
     restart: unless-stopped
     depends_on:
       postgres-master:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      rabbitmq:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
@@ -323,6 +366,7 @@ volumes:
   postgres_slave1_data:
   postgres_slave2_data:
   redis_data:
+  rabbitmq_data:
   dialogs_shard0_data:
   dialogs_shard1_data:
   dialogs_shard2_data:

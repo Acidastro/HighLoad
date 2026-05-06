@@ -13,11 +13,13 @@ from app.feed_cache import (
     fan_out_post,
     publish_post_event,
     read_feed,
+    read_feed_merged,
     rebuild_feed_for_user,
     remove_post_from_all_feeds,
     store_post_hash,
 )
 from app.models import Post, PostCreate, PostIdResponse, PostUpdate
+from app.rabbit_client import RabbitClient
 from app.redis_client import RedisClient
 
 router = APIRouter()
@@ -52,8 +54,21 @@ async def create_post(
     # Тело поста всегда сохраняем сразу (read-after-write согласованность)
     await store_post_hash(redis, post_id, payload.text, current_user, created_at)
 
-    if settings.feed_fanout_async:
-        # Публикуем событие — воркер сделает fan-out асинхронно
+    if settings.feed_transport == "rabbitmq":
+        # HW6: публикуем событие в RabbitMQ — воркер материализует ленту
+        # и шлёт целевые WS-нотификации.
+        await RabbitClient.publish(
+            settings.rabbitmq_materialize_routing_key,
+            {
+                "event_type": "created",
+                "post_id": str(post_id),
+                "author_id": str(current_user),
+                "text": payload.text,
+                "created_at": created_at.isoformat(),
+            },
+        )
+    elif settings.feed_fanout_async:
+        # HW4: публикуем событие — воркер сделает fan-out асинхронно
         await publish_post_event(redis, "created", post_id, current_user, created_at)
     else:
         await fan_out_post(redis, post_id, current_user, created_at)
@@ -119,7 +134,17 @@ async def delete_post(
     redis = RedisClient.get()
     await delete_post_hash(redis, id)
 
-    if settings.feed_fanout_async:
+    if settings.feed_transport == "rabbitmq":
+        await RabbitClient.publish(
+            settings.rabbitmq_materialize_routing_key,
+            {
+                "event_type": "deleted",
+                "post_id": str(id),
+                "author_id": str(current_user),
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+    elif settings.feed_fanout_async:
         # created_at в событии "deleted" не используется потребителем, но поле
         # обязательное в схеме — передаём время удаления как event timestamp
         await publish_post_event(
@@ -157,7 +182,12 @@ async def get_feed(
     current_user: UUID = Depends(get_current_user),
 ) -> list[Post]:
     redis = RedisClient.get()
-    items = await read_feed(redis, current_user, offset, limit)
+    if settings.feed_transport == "rabbitmq":
+        # HW6: при push-стратегии посты celebrity не материализуются —
+        # дочитываем их через pull и мерджим.
+        items = await read_feed_merged(redis, current_user, offset, limit)
+    else:
+        items = await read_feed(redis, current_user, offset, limit)
     return [
         Post(
             id=UUID(item["id"]),

@@ -57,6 +57,30 @@ class Settings(BaseSettings):
     feed_stream_batch: int = 100
 
     # ---------------------------------------------------------------------------
+    # Realtime feed via WebSocket + RabbitMQ (homework 6)
+    # feed_transport: "redis_streams" (HW4 default) | "rabbitmq" (HW6)
+    # При "rabbitmq" producer публикует в exchange posts.events, воркер слушает
+    # очередь feed.materialize и шлёт целевые события для WS подписчиков.
+    # ---------------------------------------------------------------------------
+    feed_transport: str = "redis_streams"
+    rabbitmq_url: str = "amqp://guest:guest@localhost:5672/"
+    rabbitmq_exchange: str = "posts.events"
+    rabbitmq_materialize_queue: str = "feed.materialize"
+    rabbitmq_materialize_routing_key: str = "feed.materialize"
+    # Префикс роутинг-ключа для целевой доставки в WS подписчику S
+    rabbitmq_user_routing_prefix: str = "feed.user"
+    rabbitmq_prefetch: int = 16
+
+    # Порог для celebrity (Lady Gaga effect): если followers >= порога — skip push
+    celebrity_followers_threshold: int = 10000
+    # TTL кэша флага is_celebrity в Redis (секунды)
+    celebrity_cache_ttl: int = 300
+
+    # WebSocket
+    ws_heartbeat_interval_s: int = 25
+    ws_idle_timeout_s: int = 60
+
+    # ---------------------------------------------------------------------------
     # Dialogs sharding (homework 5)
     # Список DSN шардов через запятую, в порядке индексов: shard0, shard1, ...
     # Пример (локально):

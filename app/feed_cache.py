@@ -88,6 +88,99 @@ async def get_followers(author_id: UUID) -> list[UUID]:
     return [row["user_id"] for row in rows]
 
 
+async def get_celebrity_friends(redis: RedisAny, user_id: UUID) -> list[UUID]:
+    """Возвращает друзей пользователя, помеченных как celebrity.
+
+    Симметрично push-skip из feed_worker_rmq: используем тот же Redis-кэш
+    `celebrity:{author_id}`, что и `is_celebrity()`. Если кэша нет —
+    обращаемся в БД и заполняем его.
+    """
+    # Сначала список всех друзей юзера
+    async with Database.master_connection() as conn:
+        rows = await conn.fetch(
+            "SELECT friend_id FROM friendships WHERE user_id = $1",
+            user_id,
+        )
+    friend_ids: list[UUID] = [row["friend_id"] for row in rows]
+    if not friend_ids:
+        return []
+
+    # Проверяем cache в один MGET
+    cache_keys = [f"celebrity:{fid}" for fid in friend_ids]
+    cached: list[bytes | None] = await redis.mget(cache_keys)
+
+    celebrity_ids: list[UUID] = []
+    missing_in_cache: list[UUID] = []
+    for fid, val in zip(friend_ids, cached, strict=True):
+        if val is None:
+            missing_in_cache.append(fid)
+            continue
+        if val == b"1" or val == "1":
+            celebrity_ids.append(fid)
+        # "0" — обычный, скипаем
+
+    # Для тех кого нет в кэше — fallback в БД с COUNT(*) и попутно заполним кэш
+    if missing_in_cache:
+        async with Database.master_connection() as conn:
+            db_rows = await conn.fetch(
+                """
+                SELECT friend_id AS author_id, COUNT(*) AS cnt
+                FROM friendships
+                WHERE friend_id = ANY($1::uuid[])
+                GROUP BY friend_id
+                """,
+                missing_in_cache,
+            )
+        cnt_by_id = {r["author_id"]: int(r["cnt"]) for r in db_rows}
+        async with redis.pipeline(transaction=False) as pipe:
+            for fid in missing_in_cache:
+                cnt = cnt_by_id.get(fid, 0)
+                is_celeb = cnt >= settings.celebrity_followers_threshold
+                pipe.set(
+                    f"celebrity:{fid}",
+                    "1" if is_celeb else "0",
+                    ex=settings.celebrity_cache_ttl,
+                )
+                if is_celeb:
+                    celebrity_ids.append(fid)
+            await pipe.execute()
+
+    return celebrity_ids
+
+
+async def fetch_recent_posts_by_authors(
+    author_ids: list[UUID],
+    limit: int,
+) -> list[dict[str, str]]:
+    """Свежие посты группы авторов (для pull-фоллбека celebrity).
+
+    Возвращает уже в формате read_feed: id, text, author_user_id.
+    """
+    if not author_ids:
+        return []
+    async with Database.master_connection() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT id, text, author_id, created_at
+            FROM posts
+            WHERE author_id = ANY($1::uuid[])
+            ORDER BY created_at DESC
+            LIMIT $2
+            """,
+            author_ids,
+            limit,
+        )
+    return [
+        {
+            "id": str(r["id"]),
+            "text": r["text"],
+            "author_user_id": str(r["author_id"]),
+            "_created_at": r["created_at"].isoformat(),
+        }
+        for r in rows
+    ]
+
+
 async def fan_out_post(
     redis: RedisAny,
     post_id: UUID,
@@ -322,3 +415,46 @@ async def read_feed(
         await redis.zrem(key, *stale_ids)
 
     return result
+
+
+async def read_feed_merged(
+    redis: RedisAny,
+    user_id: UUID,
+    offset: int,
+    limit: int,
+) -> list[dict[str, str]]:
+    """Чтение ленты с pull-фоллбеком для celebrity (homework 6, урок 10).
+
+    Push-модель не материализует посты celebrity-авторов (см. feed_worker).
+    На чтении мы дочитываем их свежие посты отдельным запросом и мерджим
+    с push-частью, отсортированной по created_at DESC.
+    """
+    push_part = await read_feed(redis, user_id, 0, offset + limit)
+    celebrity_authors = await get_celebrity_friends(redis, user_id)
+    pull_part = await fetch_recent_posts_by_authors(celebrity_authors, offset + limit)
+
+    # Дополняем push-часть _created_at из post:{id} hash для корректной сортировки.
+    if push_part:
+        async with redis.pipeline(transaction=False) as pipe:
+            for item in push_part:
+                pipe.hget(post_key(UUID(item["id"])), "created_at")
+            created_ats: list[str | None] = await pipe.execute()
+        for item, ts in zip(push_part, created_ats, strict=True):
+            item["_created_at"] = ts or ""
+
+    merged = list(push_part) + list(pull_part)
+    # Дедуп по id (на случай если celebrity-друг недавно стал celebrity и
+    # часть его постов уже успела попасть в push-ленту).
+    seen: set[str] = set()
+    unique: list[dict[str, str]] = []
+    for item in merged:
+        if item["id"] in seen:
+            continue
+        seen.add(item["id"])
+        unique.append(item)
+    unique.sort(key=lambda i: i.get("_created_at", ""), reverse=True)
+    sliced = unique[offset : offset + limit]
+    # Убираем служебное поле перед возвратом
+    for item in sliced:
+        item.pop("_created_at", None)
+    return sliced

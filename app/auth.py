@@ -61,3 +61,20 @@ async def get_current_user(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Malformed token subject",
         ) from exc
+
+
+def authenticate_ws(token: str) -> UUID | None:
+    """WebSocket-аутентификация (homework 6, урок 2).
+
+    JS WebSocket API не позволяет ставить Authorization заголовок,
+    поэтому токен принимается query-параметром: ?token=JWT.
+    Возвращает user_id или None — вызывающий обязан закрыть соединение
+    с close code 4401 при None.
+    """
+    user_id_str = decode_access_token(token)
+    if user_id_str is None:
+        return None
+    try:
+        return UUID(user_id_str)
+    except ValueError:
+        return None

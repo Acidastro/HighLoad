@@ -250,6 +250,110 @@ docs/                — openapi.json, homework-специфичные заме�
 reports/             — отчёты по ДЗ + CSV/HTML от Locust
 ```
 
+## Homework 6 — realtime лента через WebSocket + RabbitMQ
+
+Кратко:
+- `POST /post/create` публикует событие в exchange `posts.events` (topic) с routing_key `feed.materialize`.
+- `feed_worker_rmq` читает очередь `feed.materialize`, материализует ленту в Redis (push) и публикует целевые события `feed.user.<S>` для каждого подписчика.
+- Каждый WS-инстанс держит **свою exclusive очередь** `ws.<id>` и динамически биндит её на `feed.user.<uid>` для активных коннектов. Получает события — `ws.send_json` в браузер.
+- Для celebrity (`followers >= 10000`) push-fan-out **скипается**, посты дочитываются pull'ом при `GET /post/feed`.
+
+Запуск:
+```bash
+docker compose up -d
+# WS-клиент (в учебных целях):
+wscat -c "ws://localhost:8080/post/feed/posted?token=$JWT"
+# триггер от друга:
+curl -X POST http://localhost:8080/post/create \
+     -H "Authorization: Bearer $JWT_FRIEND" \
+     -H "Content-Type: application/json" \
+     -d '{"text":"hi"}'
+# должно прилететь {"type":"post.new", ...}
+```
+
+Management UI: `http://localhost:15672` (guest/guest).
+
+### Масштабирование RabbitMQ
+
+В HW6 в compose поднят **один узел** RabbitMQ — этого достаточно для учебного сценария. Ниже — план масштабирования для production по мере роста нагрузки.
+
+#### 1. Vertical scaling (низковисящий фрукт)
+
+Поднять CPU/RAM/диск на узле брокера. RAM — для очередей, NVMe SSD — для durable/quorum очередей. Часто это покупает 5–10× headroom без архитектурных изменений.
+
+#### 2. Clustering (3+ узлов)
+
+Развернуть кластер из 3 узлов (`rabbitmq-1/2/3`) с автоматическим cluster_formation. **Метаданные** (определения exchange, queue, bindings, users) реплицируются на все узлы. **Данные очередей по умолчанию НЕ реплицируются** — очередь живёт на одном узле; падение узла = очередь недоступна, пока он не вернётся.
+
+Используется в связке с durable + quorum queues (см. п. 4) для отказоустойчивости.
+
+#### 3. Mirrored queues (НЕ использовать)
+
+Старая модель репликации очередей через master-slave. **Deprecated с 3.10**, удалена в 4.0. Если встречается в legacy-документации — игнорируй для новых проектов.
+
+#### 4. Quorum queues (рекомендуемо для production)
+
+Современная replicated очередь на алгоритме Raft. Durable, переживает падение меньшинства узлов в кластере (например, 1 из 3). В нашем коде уже включено для `feed.materialize`:
+
+```python
+queue = await channel.declare_queue(
+    settings.rabbitmq_materialize_queue,
+    durable=True,
+    arguments={"x-queue-type": "quorum"},
+)
+```
+
+Для `ws.<id>` quorum **не нужен** — exclusive + auto_delete очереди эфемерны, потеря безопасна (клиенты переподключатся и пересоздадут bindings).
+
+#### 5. Sharding plugin
+
+При росте throughput на одной очереди (десятки тысяч сообщений в секунду) одна очередь становится bottleneck'ом — её обрабатывает один узел кластера. Решение — **rabbitmq-sharding plugin**: декларируется специальный exchange, который распределяет сообщения между N квазиочередями по hash(routing_key). Каждую читает своя группа consumers.
+
+Для нас: если `feed.materialize` начнёт упираться — заменяем её на 8/16 шардированных, воркеры распределяются по группам. Линейный рост пропускной способности.
+
+#### 6. Consistent-hash exchange
+
+Альтернатива sharding plugin. Plugin `rabbitmq-consistent-hash-exchange`: распределяет сообщения по очередям по hash(routing_key). Удобно когда нужно гарантировать «все события одного автора идут одному воркеру» (упорядоченность per-author).
+
+#### 7. Federation / Shovel (гео-распределение)
+
+Для multi-region: события из брокера в DC1 проксируются в брокер DC2.
+- **Federation** — публикация одного брокера автоматически реплицируется в exchange другого. Хорошо для глобального fan-out.
+- **Shovel** — простая «тележка», которая забирает сообщения из очереди одного брокера и кладёт в exchange другого. Хорошо для миграции и явных перевозок.
+
+#### 8. Lazy queues
+
+Если очередь в норме большая (миллионы сообщений), хранить её содержимое в RAM нерационально. Lazy queues пишут на диск **сразу**, в RAM держат только хвост. Медленнее, но не съедают память. Для бэклога `feed.materialize` при большом spike'е — полезно.
+
+#### 9. Streams (RabbitMQ Streams)
+
+Не путать с Redis Streams. RabbitMQ 3.9+ поддерживает append-only streams для high-throughput сценариев с replay сообщений. Альтернатива Kafka внутри той же инфры. Не используется в HW6, но имеет смысл если потребуется replay/audit log событий постов.
+
+#### План эволюции для нашей соцсети
+
+| Стадия | Узлов | Очередь `feed.materialize` | WS-очереди | Когда переходить |
+|---|---|---|---|---|
+| HW6 (учебный) | 1 | quorum (single-node) | exclusive | сейчас |
+| Bootstrap | 3 | quorum | exclusive | первые тысячи DAU |
+| Growth | 3–5 | sharded quorum (8 шардов) | exclusive | десятки тысяч DAU |
+| Scale | 5+ | sharded quorum + lazy | exclusive | миллионы постов в сутки |
+| Multi-region | 3+ на регион | sharded quorum + federation | exclusive | глобальный продукт |
+
+WS-очереди не нуждаются в шардинге — каждый инстанс держит свою. Бутылочное горлышко на WS-уровне снимается **добавлением WS-инстансов** (см. урок 9 в TDD), не настройкой брокера.
+
+### Линейная масштабируемость WS-сервиса
+
+Каждый инстанс приложения создаёт собственную exclusive очередь и биндит её на `feed.user.<uid>` для своих коннектов. RabbitMQ маршрутизирует копию сообщения только в очереди тех инстансов, у которых есть binding — каждый инстанс не видит чужих сообщений.
+
+Шардирование коннектов по инстансам делает LB (haproxy/nginx) round-robin. Sticky session не нужен — клиент при reconnect может попасть на любой инстанс.
+
+```bash
+# Запустить 3 копии WS-инстанса
+docker compose up -d --scale app=3
+```
+
+LB перед сервисом должен поддерживать WebSocket upgrade (проверь `proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade";` в nginx).
+
 ## Дальнейшее чтение
 
 - [`reports/homework_3_report.md`](reports/homework_3_report.md) — отчёт по репликации
