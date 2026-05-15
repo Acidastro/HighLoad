@@ -112,6 +112,17 @@ class Settings(BaseSettings):
     dialogs_write_n: int = 0
     dialogs_dual_write: bool = False
 
+    # ---------------------------------------------------------------------------
+    # Dialogs backend (homework 7)
+    # "postgres"  — шардированный Postgres из ДЗ-5 (DialogsCluster).
+    # "tarantool" — in-memory Tarantool с UDF на Lua.
+    # Переключение этим флагом нужно для честного A/B бенчмарка "до/после".
+    # ---------------------------------------------------------------------------
+    dialogs_backend: str = "postgres"
+    tarantool_host: str = "localhost"
+    tarantool_port: int = 3301
+    tarantool_reconnect_timeout: float = 1.0
+
     @property
     def database_url(self) -> str:
         return (

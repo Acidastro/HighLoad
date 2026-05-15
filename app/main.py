@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from app.config import settings
 from app.database import Database
 from app.dialogs.cluster import DialogsCluster
+from app.dialogs.factory import DialogRepositoryHolder
 from app.rabbit_client import RabbitClient
 from app.redis_client import RedisClient
 from app.routes.dialogs import router as dialogs_router
@@ -26,7 +27,10 @@ if TYPE_CHECKING:
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await Database.connect()
     await RedisClient.connect()
+    # DialogsCluster нужен только для backend=postgres. Поднимаем безусловно —
+    # инфраструктура из docker-compose та же, и так короче и однообразнее.
     await DialogsCluster.connect()
+    await DialogRepositoryHolder.setup()
 
     # HW6: WebSocket realtime feed via RabbitMQ
     bridge: RabbitWsBridge | None = None
@@ -60,6 +64,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         if bridge is not None:
             await bridge.stop()
             await RabbitClient.disconnect()
+        await DialogRepositoryHolder.teardown()
         await DialogsCluster.disconnect()
         await RedisClient.disconnect()
         await Database.disconnect()

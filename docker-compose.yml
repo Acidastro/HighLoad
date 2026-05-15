@@ -240,6 +240,33 @@ services:
       - postgres_net
 
   # ---------------------------------------------------------------------------
+  # Tarantool (homework 7 — диалоги в in-memory СУБД с UDF на Lua)
+  # В space dialog_messages переносится хранение сообщений из шардированного
+  # Postgres (homework 5). Клиент общается ТОЛЬКО через UDF (conn.call('...')),
+  # без прямых обращений к space через драйвер — это требование ДЗ.
+  # ---------------------------------------------------------------------------
+  tarantool:
+    image: tarantool/tarantool:2.11
+    container_name: social_network_tarantool
+    restart: unless-stopped
+    ports:
+      - "3301:3301"
+    volumes:
+      # Код Lua-приложения (init.lua + модули) монтируем read-only.
+      - ./tarantool:/opt/tarantool:ro
+      # Данные (xlog, snap) — в именованном volume, чтобы переживали рестарт.
+      - tarantool_data:/var/lib/tarantool
+    command: tarantool /opt/tarantool/init.lua
+    healthcheck:
+      test: ["CMD", "tarantool", "-e", "os.exit(require('net.box').connect('127.0.0.1:3301'):ping() and 0 or 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - postgres_net
+
+  # ---------------------------------------------------------------------------
   # Migration runner (one-shot)
   # Прогоняет все migrations/*.sql на master в лексикографическом порядке.
   # Все миграции используют IF NOT EXISTS / ON CONFLICT, поэтому повторный
@@ -298,6 +325,12 @@ services:
       # Realtime feed (homework 6)
       FEED_TRANSPORT: "rabbitmq"
       RABBITMQ_URL: "amqp://guest:guest@rabbitmq:5672/"
+      # Dialogs backend (homework 7) — переключатель для A/B бенчмарка.
+      # "postgres" — шардированный кластер из ДЗ-5.
+      # "tarantool" — in-memory СУБД с UDF.
+      DIALOGS_BACKEND: ${DIALOGS_BACKEND:-postgres}
+      TARANTOOL_HOST: tarantool
+      TARANTOOL_PORT: "3301"
     ports:
       # Динамические host-порты для масштабирования: docker compose up --scale app=N
       # Каждый инстанс получит свой свободный порт. Для одиночного запуска
@@ -320,6 +353,8 @@ services:
       dialogs-shard0:
         condition: service_healthy
       dialogs-shard1:
+        condition: service_healthy
+      tarantool:
         condition: service_healthy
     networks:
       - postgres_net
@@ -370,6 +405,7 @@ volumes:
   dialogs_shard0_data:
   dialogs_shard1_data:
   dialogs_shard2_data:
+  tarantool_data:
 
 networks:
   postgres_net:
