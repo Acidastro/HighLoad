@@ -1,118 +1,349 @@
 {
 	"info": {
 		"_postman_id": "social-network-api",
-		"name": "Social Network API",
-		"description": "API для социальной сети",
+		"name": "Social Network API (OTUS HighLoad)",
+		"description": "Учебная соцсеть FastAPI. Покрывает все 7 ДЗ: users (hw1-2), реплика-чтения (hw3), посты и лента (hw4), шардирование диалогов (hw5), realtime WS + RabbitMQ (hw6), Tarantool-бэкенд диалогов (hw7).\n\nИспользование:\n1. Запусти стек: `docker compose up -d`.\n2. Узнай порт `app`: `docker compose port app 8080` → подставь в переменную `base_url`.\n3. Выполни `Auth/Register`, потом `Auth/Login` — токен и user_id сохранятся в collection-variables автоматически (через test-скрипты).\n4. Дальше запросы используют `{{access_token}}` и `{{user_id}}`.",
 		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
 	},
 	"variable": [
-		{
-			"key": "base_url",
-			"value": "http://localhost:8000"
-		},
-		{
-			"key": "user_id",
-			"value": ""
-		},
-		{
-			"key": "access_token",
-			"value": ""
-		}
+		{ "key": "base_url",     "value": "http://localhost:8080" },
+		{ "key": "access_token", "value": "" },
+		{ "key": "user_id",      "value": "" },
+		{ "key": "friend_id",    "value": "" },
+		{ "key": "post_id",      "value": "" }
 	],
 	"item": [
 		{
-			"name": "Health Check",
-			"request": {
-				"method": "GET",
-				"header": [],
-				"url": {
-					"raw": "{{base_url}}/health",
-					"host": ["{{base_url}}"],
-					"path": ["health"]
-				}
-			}
-		},
-		{
-			"name": "Register User",
-			"event": [
+			"name": "Service",
+			"item": [
 				{
-					"listen": "test",
-					"script": {
-						"exec": [
-							"var jsonData = pm.response.json();",
-							"if (jsonData.user_id) {",
-							"    pm.collectionVariables.set('user_id', jsonData.user_id);",
-							"}"
-						],
-						"type": "text/javascript"
+					"name": "Health Check",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/health",
+							"host": ["{{base_url}}"],
+							"path": ["health"]
+						}
 					}
-				}
-			],
-			"request": {
-				"method": "POST",
-				"header": [
-					{
-						"key": "Content-Type",
-						"value": "application/json"
-					}
-				],
-				"body": {
-					"mode": "raw",
-					"raw": "{\n    \"email\": \"user@example.com\",\n    \"password\": \"password123\",\n    \"first_name\": \"Иван\",\n    \"last_name\": \"Иванов\",\n    \"birthdate\": \"1990-01-15\",\n    \"gender\": \"male\",\n    \"interests\": \"программирование, музыка, спорт\",\n    \"city\": \"Москва\"\n}"
 				},
-				"url": {
-					"raw": "{{base_url}}/user/register",
-					"host": ["{{base_url}}"],
-					"path": ["user", "register"]
-				}
-			}
-		},
-		{
-			"name": "Login",
-			"event": [
 				{
-					"listen": "test",
-					"script": {
-						"exec": [
-							"var jsonData = pm.response.json();",
-							"if (jsonData.access_token) {",
-							"    pm.collectionVariables.set('access_token', jsonData.access_token);",
-							"}"
-						],
-						"type": "text/javascript"
+					"name": "Swagger UI",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/docs",
+							"host": ["{{base_url}}"],
+							"path": ["docs"]
+						}
 					}
-				}
-			],
-			"request": {
-				"method": "POST",
-				"header": [
-					{
-						"key": "Content-Type",
-						"value": "application/json"
-					}
-				],
-				"body": {
-					"mode": "raw",
-					"raw": "{\n    \"email\": \"user@example.com\",\n    \"password\": \"password123\"\n}"
 				},
-				"url": {
-					"raw": "{{base_url}}/login",
-					"host": ["{{base_url}}"],
-					"path": ["login"]
+				{
+					"name": "OpenAPI spec",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/openapi.json",
+							"host": ["{{base_url}}"],
+							"path": ["openapi.json"]
+						}
+					}
 				}
-			}
+			]
 		},
 		{
-			"name": "Get User by ID",
-			"request": {
-				"method": "GET",
-				"header": [],
-				"url": {
-					"raw": "{{base_url}}/user/get/{{user_id}}",
-					"host": ["{{base_url}}"],
-					"path": ["user", "get", "{{user_id}}"]
+			"name": "Auth & Users (hw1-2)",
+			"item": [
+				{
+					"name": "Register",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"const data = pm.response.json();",
+									"if (data.user_id) { pm.collectionVariables.set('user_id', data.user_id); }"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [{ "key": "Content-Type", "value": "application/json" }],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"email\": \"ivan@example.com\",\n    \"password\": \"password123\",\n    \"first_name\": \"Иван\",\n    \"last_name\": \"Иванов\",\n    \"birthdate\": \"1990-01-15\",\n    \"gender\": \"male\",\n    \"interests\": \"программирование, музыка, спорт\",\n    \"city\": \"Москва\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/user/register",
+							"host": ["{{base_url}}"],
+							"path": ["user", "register"]
+						}
+					}
+				},
+				{
+					"name": "Login",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"const data = pm.response.json();",
+									"if (data.access_token) { pm.collectionVariables.set('access_token', data.access_token); }"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [{ "key": "Content-Type", "value": "application/json" }],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"email\": \"ivan@example.com\",\n    \"password\": \"password123\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/login",
+							"host": ["{{base_url}}"],
+							"path": ["login"]
+						}
+					}
+				},
+				{
+					"name": "Get user by ID",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/user/get/{{user_id}}",
+							"host": ["{{base_url}}"],
+							"path": ["user", "get", "{{user_id}}"]
+						}
+					}
+				},
+				{
+					"name": "Search users (hw2 — префиксный поиск)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/user/search?first_name=Ив&last_name=Иван",
+							"host": ["{{base_url}}"],
+							"path": ["user", "search"],
+							"query": [
+								{ "key": "first_name", "value": "Ив" },
+								{ "key": "last_name",  "value": "Иван" }
+							]
+						},
+						"description": "Возвращает анкеты, у которых first_name и last_name начинаются с заданных префиксов. Использует составной B-tree индекс (hw2)."
+					}
 				}
-			}
+			]
+		},
+		{
+			"name": "Friends (hw4)",
+			"item": [
+				{
+					"name": "Add friend",
+					"request": {
+						"method": "PUT",
+						"header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
+						"url": {
+							"raw": "{{base_url}}/friend/set/{{friend_id}}",
+							"host": ["{{base_url}}"],
+							"path": ["friend", "set", "{{friend_id}}"]
+						}
+					}
+				},
+				{
+					"name": "Remove friend",
+					"request": {
+						"method": "PUT",
+						"header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
+						"url": {
+							"raw": "{{base_url}}/friend/delete/{{friend_id}}",
+							"host": ["{{base_url}}"],
+							"path": ["friend", "delete", "{{friend_id}}"]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "Posts & Feed (hw4)",
+			"item": [
+				{
+					"name": "Create post",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"const data = pm.response.json();",
+									"if (data.id) { pm.collectionVariables.set('post_id', data.id); }"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{access_token}}" },
+							{ "key": "Content-Type",  "value": "application/json" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"text\": \"мой первый пост\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/post/create",
+							"host": ["{{base_url}}"],
+							"path": ["post", "create"]
+						}
+					}
+				},
+				{
+					"name": "Update post",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{access_token}}" },
+							{ "key": "Content-Type",  "value": "application/json" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"id\": \"{{post_id}}\",\n    \"text\": \"отредактированный текст\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/post/update",
+							"host": ["{{base_url}}"],
+							"path": ["post", "update"]
+						}
+					}
+				},
+				{
+					"name": "Delete post",
+					"request": {
+						"method": "PUT",
+						"header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
+						"url": {
+							"raw": "{{base_url}}/post/delete/{{post_id}}",
+							"host": ["{{base_url}}"],
+							"path": ["post", "delete", "{{post_id}}"]
+						}
+					}
+				},
+				{
+					"name": "Get post by ID",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/post/get/{{post_id}}",
+							"host": ["{{base_url}}"],
+							"path": ["post", "get", "{{post_id}}"]
+						}
+					}
+				},
+				{
+					"name": "Get feed",
+					"request": {
+						"method": "GET",
+						"header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
+						"url": {
+							"raw": "{{base_url}}/post/feed?offset=0&limit=10",
+							"host": ["{{base_url}}"],
+							"path": ["post", "feed"],
+							"query": [
+								{ "key": "offset", "value": "0" },
+								{ "key": "limit",  "value": "10" }
+							]
+						},
+						"description": "Возвращает ленту друзей из Redis (cap=1000). При cache miss/инвалидации — пересобирается из БД."
+					}
+				},
+				{
+					"name": "Rebuild feed (recovery)",
+					"request": {
+						"method": "POST",
+						"header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
+						"url": {
+							"raw": "{{base_url}}/post/feed/rebuild",
+							"host": ["{{base_url}}"],
+							"path": ["post", "feed", "rebuild"]
+						},
+						"description": "Принудительно пересобрать ленту из БД (например, после сбоя Redis)."
+					}
+				}
+			]
+		},
+		{
+			"name": "Dialogs (hw5, hw7)",
+			"description": "Хранилище выбирается env-флагом `DIALOGS_BACKEND`:\n- `postgres` — шардированный Citus-кластер (hw5);\n- `tarantool` — in-memory с UDF на Lua (hw7).\nКонтракт API одинаков, переключение прозрачно для клиента.",
+			"item": [
+				{
+					"name": "Send message",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{access_token}}" },
+							{ "key": "Content-Type",  "value": "application/json" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"text\": \"привет!\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/dialog/{{friend_id}}/send",
+							"host": ["{{base_url}}"],
+							"path": ["dialog", "{{friend_id}}", "send"]
+						}
+					}
+				},
+				{
+					"name": "List messages",
+					"request": {
+						"method": "GET",
+						"header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
+						"url": {
+							"raw": "{{base_url}}/dialog/{{friend_id}}/list?limit=50&offset=0",
+							"host": ["{{base_url}}"],
+							"path": ["dialog", "{{friend_id}}", "list"],
+							"query": [
+								{ "key": "limit",  "value": "50" },
+								{ "key": "offset", "value": "0" }
+							]
+						},
+						"description": "Переписка с пользователем `friend_id`. Сортировка DESC по `created_at`, пагинация limit/offset, max limit = 500."
+					}
+				}
+			]
+		},
+		{
+			"name": "Realtime (hw6) — WebSocket",
+			"item": [
+				{
+					"name": "WS subscribe (info)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "ws://localhost:8080/post/feed/posted?token={{access_token}}",
+							"protocol": "ws",
+							"host": ["localhost"],
+							"port": "8080",
+							"path": ["post", "feed", "posted"],
+							"query": [{ "key": "token", "value": "{{access_token}}" }]
+						},
+						"description": "Это **WebSocket**-эндпоинт, его нельзя дёрнуть из обычного HTTP-запроса. В Postman создай отдельный WebSocket Request (кнопка `New → WebSocket Request`) с URL:\n\n`ws://localhost:8080/post/feed/posted?token={{access_token}}`\n\nИли через CLI:\n```\nwscat -c \"ws://localhost:8080/post/feed/posted?token=$JWT\"\n```\n\nПри создании поста кем-то из твоих друзей в сокет придёт событие:\n```json\n{\"type\":\"post.new\", \"post_id\":..., \"author_id\":..., \"text_preview\":\"...\", \"created_at\":\"...\"}\n```\nКаждые 25 секунд сервер шлёт `{\"type\":\"ping\"}` — клиент должен отвечать `{\"type\":\"pong\"}`."
+					}
+				}
+			]
 		}
 	]
 }
