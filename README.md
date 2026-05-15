@@ -19,35 +19,58 @@
 | 2 | Индексы и поиск | Поиск по префиксу имени/фамилии с B-tree индексом, нагрузочные замеры |
 | 3 | Репликация PostgreSQL | Master + 2 slave, round-robin чтение со слейвов, тест failover |
 | 4 | Лента постов и кэширование | Посты, друзья, фид через Redis Sorted Set + Hash, fan-out-on-write, опциональный async fan-out через Redis Streams |
+| 5 | Шардирование диалогов | Подсистема диалогов в отдельных PG-инстансах, роутинг по `chat_id = hash(min(uA,uB), max(uA,uB))`, dual-write для решардинга |
+| 6 | Realtime-лента | WebSocket `/post/feed/posted` + RabbitMQ topic exchange `posts.events`, per-instance exclusive очереди, динамический binding на `feed.user.<S>`, целевой fan-out, skip-fan-out для celebrity |
+| 7 | Диалоги в Tarantool | Перенос модуля диалогов в in-memory СУБД, UDF на Lua (`dialog_send`/`dialog_list`), переключение PG↔Tarantool флагом `DIALOGS_BACKEND` для A/B-бенчмарка |
 
 Отчёты: [`reports/homework_3_report.md`](reports/homework_3_report.md),
-[`reports/homework_4_report.md`](reports/homework_4_report.md).
+[`reports/homework_4_report.md`](reports/homework_4_report.md),
+[`reports/homework_7_tarantool/report.md`](reports/homework_7_tarantool/report.md).
 
 ## Архитектура стека
 
+```mermaid
+flowchart LR
+    Client[HTTP Client / Browser]
+    WSClient[WS Client]
+    Locust[Locust]
+
+    Client --> App
+    Locust --> App
+    WSClient -. WS /post/feed/posted .-> App
+
+    subgraph AppLayer[FastAPI app, N инстансов]
+        App[FastAPI]
+        Worker[feed-worker<br/>RabbitMQ consumer]
+    end
+
+    %% --- hw1-hw4: users / posts / feed
+    App -- writes --> PgMaster[(postgres-master<br/>users, posts, friends)]
+    PgMaster -. streaming replication .-> PgSlave1[(postgres-slave1)]
+    PgMaster -. streaming replication .-> PgSlave2[(postgres-slave2)]
+    App -- reads round-robin --> PgSlave1
+    App -- reads round-robin --> PgSlave2
+
+    App <-- feed cache --> Redis[(redis<br/>feed:{uid}, post:{id})]
+    Worker -- materialize --> Redis
+
+    %% --- hw6: realtime via RabbitMQ
+    App -- publish<br/>routing_key=feed.materialize --> RMQ{{RabbitMQ<br/>exchange posts.events}}
+    RMQ -- feed.materialize --> Worker
+    RMQ -. feed.user.&lt;S&gt; .-> App
+
+    %% --- hw5: dialogs sharding (postgres backend)
+    App -- DIALOGS_BACKEND=postgres --> Shard0[(dialogs-shard0)]
+    App -- DIALOGS_BACKEND=postgres --> Shard1[(dialogs-shard1)]
+
+    %% --- hw7: dialogs in tarantool
+    App -- DIALOGS_BACKEND=tarantool<br/>conn.call iproto --> Tnt[/Tarantool<br/>memtx + WAL<br/>UDF dialog_send / dialog_list/]
 ```
-┌─────────────┐   writes    ┌──────────────────┐
-│  FastAPI    │────────────▶│ postgres-master  │
-│   app       │             │  (social_network)│
-│             │   reads     └────────┬─────────┘
-│             │──┐                   │ streaming replication
-│             │  │          ┌────────┴─────────┐
-│             │  └─round-rr▶│ postgres-slave1  │
-│             │             │ postgres-slave2  │
-│             │             └──────────────────┘
-│             │
-│             │   cache     ┌──────────────────┐
-│             │◀───────────▶│  redis:7         │
-└──────┬──────┘   stream    │  feed:{uid}      │
-       │                    │  post:{id}       │
-       │                    │  post_events     │
-       │                    └────────┬─────────┘
-       │                             │ XREADGROUP
-       │                    ┌────────┴─────────┐
-       └───────sync path───▶│  feed-worker     │
-                            │  (consumer grp)  │
-                            └──────────────────┘
-```
+
+**Что видно из схемы:**
+- Один и тот же FastAPI обслуживает 4 «дорожки» данных: users/posts (master+2 slave), feed cache (Redis), диалоги (sharded PG **или** Tarantool — по env-флагу) и realtime-уведомления (RabbitMQ topic exchange + WS).
+- `feed-worker` — отдельный консьюмер `feed.materialize`, кладёт ленту в Redis и шлёт целевые `feed.user.<S>` для realtime-WS.
+- Диалоги в hw7 переключаются между двумя storage-движками **без остановки сервиса** через `DIALOGS_BACKEND` и пересоздание контейнера app.
 
 ## Быстрый запуск
 
@@ -103,6 +126,23 @@ python scripts/seed_friends.py  # 30k случайных дружеских св
 | `GET` | `/post/feed?offset=0&limit=10` | Bearer | Лента друзей (кэш Redis, cap=1000) |
 | `POST` | `/post/feed/rebuild` | Bearer | Пересобрать ленту из БД (recovery) |
 
+### Dialogs (hw5, hw7)
+
+| Метод | Путь | Auth | Описание |
+|-------|------|------|----------|
+| `POST` | `/dialog/{user_id}/send` | Bearer | Отправить сообщение в диалог |
+| `GET`  | `/dialog/{user_id}/list` | Bearer | Переписка с пользователем (DESC, limit/offset) |
+
+Хранилище выбирается env-флагом `DIALOGS_BACKEND`:
+`postgres` — шардированный Citus-кластер (hw5),
+`tarantool` — in-memory с UDF (hw7).
+
+### Realtime (hw6)
+
+| Метод | Путь | Auth | Описание |
+|-------|------|------|----------|
+| `WS` | `/post/feed/posted?token=<JWT>` | Query JWT | Подписка на realtime-события постов друзей |
+
 ### Service
 
 | Метод | Путь | Описание |
@@ -145,6 +185,20 @@ FEED_FANOUT_ASYNC=false
 FEED_STREAM_KEY=post_events
 FEED_STREAM_GROUP=feed_workers
 FEED_STREAM_CONSUMER=worker-1
+
+# Dialogs sharding (hw5) — список DSN шардов через запятую
+DIALOGS_SHARDS=postgresql://postgres:postgres@dialogs-shard0:5432/dialogs,postgresql://postgres:postgres@dialogs-shard1:5432/dialogs
+DIALOGS_POOL_MIN_SIZE=2
+DIALOGS_POOL_MAX_SIZE=10
+
+# RabbitMQ (hw6)
+FEED_TRANSPORT=rabbitmq
+RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
+
+# Dialogs backend (hw7) — переключатель A/B-бенчмарка PG vs Tarantool
+DIALOGS_BACKEND=postgres        # либо tarantool
+TARANTOOL_HOST=tarantool
+TARANTOOL_PORT=3301
 ```
 
 Значения выше — дефолты для Docker Compose (внутри сети `postgres_net`).
@@ -250,6 +304,32 @@ docs/                — openapi.json, homework-специфичные заме�
 reports/             — отчёты по ДЗ + CSV/HTML от Locust
 ```
 
+## Homework 5 — Шардирование подсистемы диалогов
+
+Диалоги вынесены из основного `postgres-master` в отдельные PG-инстансы:
+`dialogs-shard0`, `dialogs-shard1` (опциональный `dialogs-shard2` под профилем
+`resharding`). Каждый шард — независимая БД с одинаковой схемой `messages`.
+
+Роутинг по шардам:
+```python
+chat_id = compute_chat_id(min(uA, uB), max(uA, uB))  # детерминированный hash от симметричной пары
+shard   = shard_for_chat(chat_id, n_shards)          # модульный roting
+```
+
+Симметричный ключ (min/max) гарантирует, что переписка Алисы↔Боба и Боба↔Алисы
+живёт **на одном шарде**, иначе пришлось бы делать scatter-gather на чтении.
+
+Решардинг (добавление третьего шарда без даунтайма) реализован через
+feature-flag'и `DIALOGS_READ_N`, `DIALOGS_WRITE_N`, `DIALOGS_DUAL_WRITE` плюс
+скрипт backfill — см. `scripts/resharding.py`. Этапы:
+1. `WRITE_N=new`, `READ_N=old`, `DUAL_WRITE=true` — пишем в оба варианта раскладки.
+2. Backfill переносит исторические данные на новую позицию.
+3. `READ_N=new` — переключаем чтения.
+4. `DUAL_WRITE=false` + cleanup — удаляем устаревшие копии.
+
+CSV-результаты нагрузочного теста: `reports/homework_5_sharding/` (uniform + lady_gaga,
+сценарий — `scripts/locust/homework_5_locust.py`).
+
 ## Homework 6 — realtime лента через WebSocket + RabbitMQ
 
 Кратко:
@@ -354,8 +434,43 @@ docker compose up -d --scale app=3
 
 LB перед сервисом должен поддерживать WebSocket upgrade (проверь `proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade";` в nginx).
 
+## Homework 7 — Диалоги в Tarantool (in-memory + UDF)
+
+Перенос модуля диалогов из шардированного Postgres в Tarantool с переписыванием
+бизнес-логики на хранимые процедуры на Lua. Postgres-реализация остаётся —
+переключение бэкендов env-флагом `DIALOGS_BACKEND={postgres,tarantool}`
+для честного A/B-сравнения.
+
+Что внутри:
+- **Tarantool 2.11** (memtx + WAL + snapshot), один space `dialog_messages` с composite TREE-индексом `(chat_key, created_at, id)`.
+- **UDF на Lua** — `dialog_send`, `dialog_list`. Клиент НЕ ходит в space напрямую через драйвер: только `conn:call('dialog_send', ...)` / `conn:call('dialog_list', ...)` — требование ДЗ.
+- **Python-клиент** — `asynctnt` (async-friendly C-extension, не блокирует event loop FastAPI).
+- **DialogRepository (Protocol)** + две реализации (`PgDialogRepository`, `TarantoolDialogRepository`) + фабрика по env-флагу. Роуты `/dialog/*` стали тонкими — вся логика хранилища за фасадом репозитория.
+
+Запуск:
+```bash
+# A. Postgres-бэкенд (по умолчанию)
+export DIALOGS_BACKEND=postgres
+docker compose up -d
+
+# B. Tarantool-бэкенд (контракт API не меняется)
+export DIALOGS_BACKEND=tarantool
+docker compose up -d --force-recreate --no-deps app
+docker compose logs app | grep DialogRepository
+# → [DialogRepository] backend=tarantool, tarantool:3301
+```
+
+Нагрузочное сравнение PG vs Tarantool (uniform + lady_gaga), полная методология
+и таблицы метрик — [`reports/homework_7_tarantool/report.md`](reports/homework_7_tarantool/report.md).
+Учебная разбивка реализации по 12 шагам — [`docs/tdd/homework_7_tarantool.md`](docs/tdd/homework_7_tarantool.md).
+
+Главный вывод: при горячем чате (lady_gaga effect) Tarantool обходит шардированный
+Postgres в **3× по p99** и **6.7× по max latency** — потому что hot-spot не упирается
+в один шард, а память даёт жёстко ограниченный хвост.
+
 ## Дальнейшее чтение
 
 - [`reports/homework_3_report.md`](reports/homework_3_report.md) — отчёт по репликации
 - [`reports/homework_4_report.md`](reports/homework_4_report.md) — отчёт по ленте и кэшу
+- [`reports/homework_7_tarantool/report.md`](reports/homework_7_tarantool/report.md) — отчёт по Tarantool
 - [`docs/openapi.json`](docs/openapi.json) — контракт API
