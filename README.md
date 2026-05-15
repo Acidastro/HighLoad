@@ -31,40 +31,40 @@
 
 ```mermaid
 flowchart LR
-    Client[HTTP Client / Browser]
-    WSClient[WS Client]
-    Locust[Locust]
+    Client["HTTP Client / Browser"]
+    WSClient["WS Client"]
+    Locust["Locust"]
 
     Client --> App
     Locust --> App
-    WSClient -. WS /post/feed/posted .-> App
+    WSClient -. "WS /post/feed/posted" .-> App
 
-    subgraph AppLayer[FastAPI app, N инстансов]
-        App[FastAPI]
-        Worker[feed-worker<br/>RabbitMQ consumer]
+    subgraph AppLayer["FastAPI app, N инстансов"]
+        App["FastAPI"]
+        Worker["feed-worker<br/>RabbitMQ consumer"]
     end
 
     %% --- hw1-hw4: users / posts / feed
-    App -- writes --> PgMaster[(postgres-master<br/>users, posts, friends)]
-    PgMaster -. streaming replication .-> PgSlave1[(postgres-slave1)]
-    PgMaster -. streaming replication .-> PgSlave2[(postgres-slave2)]
-    App -- reads round-robin --> PgSlave1
-    App -- reads round-robin --> PgSlave2
+    App -- writes --> PgMaster[("postgres-master<br/>users, posts, friends")]
+    PgMaster -. "streaming replication" .-> PgSlave1[("postgres-slave1")]
+    PgMaster -. "streaming replication" .-> PgSlave2[("postgres-slave2")]
+    App -- "reads round-robin" --> PgSlave1
+    App -- "reads round-robin" --> PgSlave2
 
-    App <-- feed cache --> Redis[(redis<br/>feed:{uid}, post:{id})]
+    App <-- "feed cache" --> Redis[("redis<br/>feed:uid, post:id")]
     Worker -- materialize --> Redis
 
     %% --- hw6: realtime via RabbitMQ
-    App -- publish<br/>routing_key=feed.materialize --> RMQ{{RabbitMQ<br/>exchange posts.events}}
-    RMQ -- feed.materialize --> Worker
-    RMQ -. feed.user.&lt;S&gt; .-> App
+    App -- "publish<br/>routing_key=feed.materialize" --> RMQ{{"RabbitMQ<br/>exchange posts.events"}}
+    RMQ -- "feed.materialize" --> Worker
+    RMQ -. "feed.user.S" .-> App
 
     %% --- hw5: dialogs sharding (postgres backend)
-    App -- DIALOGS_BACKEND=postgres --> Shard0[(dialogs-shard0)]
-    App -- DIALOGS_BACKEND=postgres --> Shard1[(dialogs-shard1)]
+    App -- "DIALOGS_BACKEND=postgres" --> Shard0[("dialogs-shard0")]
+    App -- "DIALOGS_BACKEND=postgres" --> Shard1[("dialogs-shard1")]
 
     %% --- hw7: dialogs in tarantool
-    App -- DIALOGS_BACKEND=tarantool<br/>conn.call iproto --> Tnt[/Tarantool<br/>memtx + WAL<br/>UDF dialog_send / dialog_list/]
+    App -- "DIALOGS_BACKEND=tarantool<br/>conn.call iproto" --> Tnt[/"Tarantool<br/>memtx + WAL<br/>UDF dialog_send / dialog_list"/]
 ```
 
 **Что видно из схемы:**
