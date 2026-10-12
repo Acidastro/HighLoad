@@ -1,11 +1,16 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from uuid import UUID
 
 import bcrypt
 import jwt
+from fastapi import Depends, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.config import settings
+
+_bearer_scheme = HTTPBearer(auto_error=True)
 
 
 def hash_password(password: str) -> str:
@@ -35,4 +40,41 @@ def decode_access_token(token: str) -> str | None:
         )
         return payload.get("sub")
     except jwt.PyJWTError:
+        return None
+
+
+async def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(_bearer_scheme),
+) -> UUID:
+    """FastAPI dependency: извлекает user_id из JWT Bearer токена."""
+    user_id_str = decode_access_token(credentials.credentials)
+    if user_id_str is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    try:
+        return UUID(user_id_str)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Malformed token subject",
+        ) from exc
+
+
+def authenticate_ws(token: str) -> UUID | None:
+    """WebSocket-аутентификация (homework 6, урок 2).
+
+    JS WebSocket API не позволяет ставить Authorization заголовок,
+    поэтому токен принимается query-параметром: ?token=JWT.
+    Возвращает user_id или None — вызывающий обязан закрыть соединение
+    с close code 4401 при None.
+    """
+    user_id_str = decode_access_token(token)
+    if user_id_str is None:
+        return None
+    try:
+        return UUID(user_id_str)
+    except ValueError:
         return None

@@ -1,9 +1,14 @@
-version: '3.8'
+# docker-compose.yml — топология: 1 master + 2 slave PostgreSQL 16 + Redis + FastAPI app + feed-worker
+# Streaming Replication (async), Redis-кэш ленты постов с опциональным async fan-out через Redis Streams.
 
 services:
-  postgres:
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL Master (WRITE узел)
+  # ---------------------------------------------------------------------------
+  postgres-master:
     image: postgres:16-alpine
-    container_name: social_network_db
+    container_name: social_network_master
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
@@ -11,8 +16,397 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - postgres_master_data:/var/lib/postgresql/data
+      # Миграции применяются при первом запуске через docker-entrypoint-initdb.d
       - ./migrations:/docker-entrypoint-initdb.d
+      # Конфиги мастера
+      - ./docker/postgres/master/postgresql.conf:/etc/postgresql/postgresql.conf
+      - ./docker/postgres/master/pg_hba.conf:/etc/postgresql/pg_hba.conf
+      # Скрипт инициализации: создание replication user
+      - ./docker/postgres/init-master.sh:/docker-entrypoint-initdb.d/999_init_master.sh
+    command: postgres -c config_file=/etc/postgresql/postgresql.conf -c hba_file=/etc/postgresql/pg_hba.conf
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d social_network"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - postgres_net
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL Slave 1 (READ узел)
+  # ---------------------------------------------------------------------------
+  postgres-slave1:
+    image: postgres:16-alpine
+    container_name: social_network_slave1
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      PGPASSWORD: postgres
+      MASTER_HOST: postgres-master
+      MASTER_PORT: "5432"
+      REPL_USER: replicator
+      REPL_PASSWORD: replicator_password
+      SLAVE_NAME: slave1
+      PGDATA: /var/lib/postgresql/data
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_slave1_data:/var/lib/postgresql/data
+      - ./docker/postgres/slave/postgresql.conf:/etc/postgresql/postgresql.conf
+      - ./docker/postgres/init-slave.sh:/init-slave.sh
+    entrypoint: ["/bin/bash", "/init-slave.sh"]
+    depends_on:
+      postgres-master:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      - postgres_net
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL Slave 2 (READ узел)
+  # ---------------------------------------------------------------------------
+  postgres-slave2:
+    image: postgres:16-alpine
+    container_name: social_network_slave2
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      PGPASSWORD: postgres
+      MASTER_HOST: postgres-master
+      MASTER_PORT: "5432"
+      REPL_USER: replicator
+      REPL_PASSWORD: replicator_password
+      SLAVE_NAME: slave2
+      PGDATA: /var/lib/postgresql/data
+    ports:
+      - "5434:5432"
+    volumes:
+      - postgres_slave2_data:/var/lib/postgresql/data
+      - ./docker/postgres/slave/postgresql.conf:/etc/postgresql/postgresql.conf
+      - ./docker/postgres/init-slave.sh:/init-slave.sh
+    entrypoint: ["/bin/bash", "/init-slave.sh"]
+    depends_on:
+      postgres-master:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      - postgres_net
+
+  # ---------------------------------------------------------------------------
+  # Redis (кэш ленты постов — homework 4)
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: social_network_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    # AOF включён ради persistence Redis Streams и consumer group state (post_events)
+    # maxmemory-policy allkeys-lru — кэш лент и post hash вытесняются при давлении
+    command: >
+      redis-server
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+      --appendonly yes
+      --appendfsync everysec
+      --auto-aof-rewrite-percentage 100
+      --auto-aof-rewrite-min-size 64mb
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - postgres_net
+
+  # ---------------------------------------------------------------------------
+  # RabbitMQ (homework 6 — realtime feed через WebSocket)
+  # Topic exchange "posts.events":
+  #   routing_key=feed.materialize → durable queue, читает feed-worker
+  #   routing_key=feed.user.<S>    → exclusive per-WS-instance queue
+  # Для одного узла HW достаточно; production = 3 узла + quorum queues
+  # (см. README раздел "Масштабирование RabbitMQ").
+  # ---------------------------------------------------------------------------
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: social_network_rabbitmq
+    restart: unless-stopped
+    ports:
+      - "5673:5672"   # AMQP (5672 на хосте занят другим dev-инстансом — публикуем на 5673)
+      - "15673:15672" # Management UI
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    networks:
+      - postgres_net
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL Dialogs Shard 0 (homework 5 — шардированные диалоги)
+  # Независимый инстанс БД для подсистемы диалогов. Schema применяется через
+  # docker-entrypoint-initdb.d из migrations/dialogs/.
+  # ---------------------------------------------------------------------------
+  dialogs-shard0:
+    image: postgres:16-alpine
+    container_name: dialogs_shard0
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: dialogs
+    ports:
+      - "5440:5432"
+    volumes:
+      - dialogs_shard0_data:/var/lib/postgresql/data
+      - ./migrations/dialogs:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d dialogs"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - postgres_net
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL Dialogs Shard 1
+  # ---------------------------------------------------------------------------
+  dialogs-shard1:
+    image: postgres:16-alpine
+    container_name: dialogs_shard1
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: dialogs
+    ports:
+      - "5441:5432"
+    volumes:
+      - dialogs_shard1_data:/var/lib/postgresql/data
+      - ./migrations/dialogs:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d dialogs"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - postgres_net
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL Dialogs Shard 2 (поднимается ТОЛЬКО для сценария решардинга,
+  # см. итерацию 6 учебного плана). Активируется профилем "resharding":
+  #     docker compose --profile resharding up -d dialogs-shard2
+  # ---------------------------------------------------------------------------
+  dialogs-shard2:
+    image: postgres:16-alpine
+    container_name: dialogs_shard2
+    profiles: ["resharding"]
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: dialogs
+    ports:
+      - "5442:5432"
+    volumes:
+      - dialogs_shard2_data:/var/lib/postgresql/data
+      - ./migrations/dialogs:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d dialogs"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - postgres_net
+
+  # ---------------------------------------------------------------------------
+  # Tarantool (homework 7 — диалоги в in-memory СУБД с UDF на Lua)
+  # В space dialog_messages переносится хранение сообщений из шардированного
+  # Postgres (homework 5). Клиент общается ТОЛЬКО через UDF (conn.call('...')),
+  # без прямых обращений к space через драйвер — это требование ДЗ.
+  # ---------------------------------------------------------------------------
+  tarantool:
+    image: tarantool/tarantool:2.11
+    container_name: social_network_tarantool
+    restart: unless-stopped
+    ports:
+      - "3301:3301"
+    volumes:
+      # Код Lua-приложения (init.lua + модули) монтируем read-only.
+      - ./tarantool:/opt/tarantool:ro
+      # Данные (xlog, snap) — в именованном volume, чтобы переживали рестарт.
+      - tarantool_data:/var/lib/tarantool
+    command: tarantool /opt/tarantool/init.lua
+    healthcheck:
+      test: ["CMD", "tarantool", "-e", "os.exit(require('net.box').connect('127.0.0.1:3301'):ping() and 0 or 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - postgres_net
+
+  # ---------------------------------------------------------------------------
+  # Migration runner (one-shot)
+  # Прогоняет все migrations/*.sql на master в лексикографическом порядке.
+  # Все миграции используют IF NOT EXISTS / ON CONFLICT, поэтому повторный
+  # прогон безопасен. Initdb.d на мастере остаётся для случая свежего volume —
+  # на уже инициализированном volume миграции пройдут только через этот сервис.
+  # ---------------------------------------------------------------------------
+  migrate:
+    image: postgres:16-alpine
+    container_name: social_network_migrate
+    environment:
+      PGPASSWORD: postgres
+    volumes:
+      - ./migrations:/migrations:ro
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        for f in /migrations/*.sql; do
+          echo "[migrate] Applying $$f"
+          psql -h postgres-master -U postgres -d social_network \
+               -v ON_ERROR_STOP=1 -f "$$f"
+        done
+        echo "[migrate] All migrations applied."
+    depends_on:
+      postgres-master:
+        condition: service_healthy
+    networks:
+      - postgres_net
+
+  # ---------------------------------------------------------------------------
+  # FastAPI Application
+  # ---------------------------------------------------------------------------
+  app:
+    build: .
+    # container_name закомментирован для возможности масштабирования через --scale
+    # container_name: social_network_app
+    environment:
+      # Master (WRITE)
+      DATABASE_HOST: postgres-master
+      DATABASE_PORT: "5432"
+      DATABASE_USER: postgres
+      DATABASE_PASSWORD: postgres
+      DATABASE_NAME: social_network
+      # Slaves (READ) — через запятую host:port
+      DATABASE_SLAVE_HOSTS: "postgres-slave1:5432,postgres-slave2:5432"
+      DATABASE_POOL_MIN_SIZE: "5"
+      DATABASE_POOL_MAX_SIZE: "50"
+      # Redis (кэш ленты постов)
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_DB: "0"
+      # Dialogs sharding (homework 5)
+      DIALOGS_SHARDS: "postgresql://postgres:postgres@dialogs-shard0:5432/dialogs,postgresql://postgres:postgres@dialogs-shard1:5432/dialogs"
+      DIALOGS_POOL_MIN_SIZE: "2"
+      DIALOGS_POOL_MAX_SIZE: "10"
+      # Realtime feed (homework 6)
+      FEED_TRANSPORT: "rabbitmq"
+      RABBITMQ_URL: "amqp://guest:guest@rabbitmq:5672/"
+      # Dialogs backend (homework 7) — переключатель для A/B бенчмарка.
+      # "postgres" — шардированный кластер из ДЗ-5.
+      # "tarantool" — in-memory СУБД с UDF.
+      DIALOGS_BACKEND: ${DIALOGS_BACKEND:-postgres}
+      TARANTOOL_HOST: tarantool
+      TARANTOOL_PORT: "3301"
+    ports:
+      # Динамические host-порты для масштабирования: docker compose up --scale app=N
+      # Каждый инстанс получит свой свободный порт. Для одиночного запуска
+      # можно задать "8090:8080" — тогда фронт пойдёт на 8090.
+      - "8080"
+    restart: unless-stopped
+    depends_on:
+      postgres-master:
+        condition: service_healthy
+      postgres-slave1:
+        condition: service_healthy
+      postgres-slave2:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      dialogs-shard0:
+        condition: service_healthy
+      dialogs-shard1:
+        condition: service_healthy
+      tarantool:
+        condition: service_healthy
+    networks:
+      - postgres_net
+
+  # ---------------------------------------------------------------------------
+  # Feed worker (Redis Streams consumer, Phase 7)
+  # Включается через FEED_FANOUT_ASYNC=true в app, сам воркер запускается всегда.
+  # ---------------------------------------------------------------------------
+  feed-worker:
+    build: .
+    container_name: social_network_feed_worker
+    command: ["python", "-m", "app.workers.feed_worker_rmq"]
+    environment:
+      DATABASE_HOST: postgres-master
+      DATABASE_PORT: "5432"
+      DATABASE_USER: postgres
+      DATABASE_PASSWORD: postgres
+      DATABASE_NAME: social_network
+      DATABASE_SLAVE_HOSTS: "postgres-slave1:5432,postgres-slave2:5432"
+      DATABASE_POOL_MIN_SIZE: "2"
+      DATABASE_POOL_MAX_SIZE: "10"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_DB: "0"
+      FEED_STREAM_CONSUMER: "worker-1"
+      # Realtime feed (homework 6)
+      FEED_TRANSPORT: "rabbitmq"
+      RABBITMQ_URL: "amqp://guest:guest@rabbitmq:5672/"
+    restart: unless-stopped
+    depends_on:
+      postgres-master:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    networks:
+      - postgres_net
 
 volumes:
-  postgres_data:
+  postgres_master_data:
+  postgres_slave1_data:
+  postgres_slave2_data:
+  redis_data:
+  rabbitmq_data:
+  dialogs_shard0_data:
+  dialogs_shard1_data:
+  dialogs_shard2_data:
+  tarantool_data:
+
+networks:
+  postgres_net:
+    driver: bridge
